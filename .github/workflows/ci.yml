@@ -5,7 +5,7 @@ on:
    
 jobs:
   setup-and-test:
-    runs-on: self-hosted  # This line is changed
+    runs-on: example  # This line is changed
     services:
       postgresql:
         image: postgres:14
