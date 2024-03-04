@@ -1,79 +1,101 @@
-name: Continuous Integration
+name: Build, Test, and Deploy to Dev
 
-on: 
+on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
-   
+
 jobs:
-  setup-and-test:
-    runs-on: self-hosted  # This line is changed
-    services:
-      postgresql:
-        image: postgres:14
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+  build-and-deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '18'
+      
+      # - name: Install Dependencies
+      #   run: |
+      #     cd portal && npm install
+
+      - name: Run pre-installation and installation scripts
+        run: |
+          bin/pre-install.sh
+          bin/install-ci.sh
+
+      - name: Package Application
+        run: bin/package.sh
+
+      # - name: Deploy to Development Server
+      #   env:
+      #     AWX_TEMPLATE: ${{ secrets.DEVELOPMENT_JOB_TEMPLATE }}
+      #     LAMBDA_FUNCTION: ${{ secrets.LAMBDA_FUNCTION }}
+      #     LAMBDA_FUNCTION_AUTH_KEY: ${{ secrets.LAMBDA_FUNCTION_AUTH_KEY }}
+      #     LAMBDA_FUNCTION_REGION: ${{ secrets.LAMBDA_FUNCTION_REGION }}
+      #   run: |
+      #     echo "Deploying build from ${GITHUB_SHA} to development server"
+      #     # continuous-delivery-scripts/awx-lambda-proxy.sh --awx-template "$AWX_TEMPLATE" --servers "${GITHUB_REF}" --build "${GITHUB_SHA}" --lambda-function "$LAMBDA_FUNCTION" --lambda-function-auth-key "$LAMBDA_FUNCTION_AUTH_KEY" --lambda-function-region "$LAMBDA_FUNCTION_REGION" || exit 1
+      #     echo "Development deployment completed."
+          
+  test:
+    # needs: build-and-deploy
+    runs-on: self-hosted
     strategy:
+      fail-fast: false
       matrix:
-        php-version: ['8.0.9'] # Define other PHP versions here if needed
+        include:
+          - env: TEST_SUITE=onTheFly TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=lint TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-admin1 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-admin2 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-admin3 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-api-dir TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-application1 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-application2 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-application3 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-authentication-dir+module-bumblebee-dir+module-dataaccess-dir+module-datamining-dir+module-db-dir+module-exception-dir+module-internal-dir+module-middleware-dir+module-oneoff-dir TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-repository1 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          # Add the rest of the test suites here following the same pattern.
+          - env: TEST_SUITE=module-service-dir+module-utility-dir TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=legacy-tests1 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=legacy-tests2 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=legacy-tests3 TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
+          - env: TEST_SUITE=module-admin-dir+module-application-dir+module-repository-dir+legacy-tests-dir+catchall-dir TARGET_BRANCH=master ALWAYS_RUN_ALL_TESTS=false
 
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: ${{ matrix.php-version }}
-        extensions: mbstring, pdo_pgsql  # Add necessary extensions here
-        ini-values: post_max_size=256M, upload_max_filesize=256M  # Set ini configs
-        coverage: none
-
-    - name: Check PHP Version
-      run: php --version
-
-    - name: Check PostgreSQL Client Version
-      run: psql --version
-
-    - name: Check PostgreSQL Server Version
-      run: |
-        PGPASSWORD=postgres psql -h localhost -U postgres -c "SELECT version();"
-
-    # Place your additional setup and test commands here
-    # ...
-
-  deploy-to-dev:
-    runs-on: self-hosted
-    needs: setup-and-test
-    steps:
-    - uses: actions/checkout@v2
-    - name: Deploy to Development
-      run: |
-        echo "Deploying to development server..."
-        # Your deployment script for dev
-
-  deploy-to-staging:
-    runs-on: self-hosted
-    needs: setup-and-test
-    steps:
-    - uses: actions/checkout@v2
-    - name: Deploy to Staging
-      run: |
-        echo "Deploying to staging server..."
-        # Your deployment script for staging
-
-  deploy-to-production:
-    runs-on: self-hosted
-    needs: setup-and-test
-    steps:
-    - uses: actions/checkout@v2
-    - name: Deploy to Production
-      run: |
-        echo "Deploying to production server..."
-        # Your deployment script for productio
+      - uses: actions/checkout@v2
+      
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0.9'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_pgsql
+          coverage: none
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+          sudo docker-php-ext-install pdo pdo_pgsql pgsql
+      
+      - name: Before Script Setup
+        run: |
+          ulimit -c unlimited -S
+          sudo mount -o remount,size=2048m /var/ramfs
+      
+      - name: Run Tests
+        run: |
+          bin/install-ci.sh
+          bin/run-tests.sh
+        env:
+          TEST_SUITE: ${{ matrix.env.TEST_SUITE }}
+          TARGET_BRANCH: ${{ matrix.env.TARGET_BRANCH }}
+          ALWAYS_RUN_ALL_TESTS: ${{ matrix.env.ALWAYS_RUN_ALL_TESTS }}
+      
+      - name: Check Core Dump
+        if: failure()
+        run: |
+          bin/check-core-dump.sh
